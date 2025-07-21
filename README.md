@@ -1,5 +1,5 @@
 # 2024-recommendation-system
-멜로니어리(melon+diary) : 오늘의 일기를 입력하면 오늘 듣기 좋은 노래를 추천해주는 알고리즘
+멜로니어리(melon+diary) : 오늘의 일기를 입력하면 분위기에 맞는 노래를 추천해주는 알고리즘
 
 ## Data
 
