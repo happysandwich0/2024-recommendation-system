@@ -54,7 +54,7 @@
 
 
 
-### 4️⃣ 최종 근접성 측정 (Final Recommendation)
+**4️⃣ 최종 근접성 측정 (Final Recommendation)**
 
 **목표:** 필터링된 후보 곡 중 일기 태그의 의미적 위치에 가장 가까운 곡을 찾음  
 **측정 방법:** 유클리드 거리 (Euclidean Distance)
