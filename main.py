@@ -99,7 +99,7 @@ filtered_play_df = play_df[play_df['플리'].isin(similar_playlist_names)].drop_
 
 # --- 4. 취향 조건 필터링 및 2차 후보 곡 선정 (장르/차트) ---
 user_genre = input("나의 취향 장르는? (예: 힙합, 발라드 등): ")
-user_ox = input("나는 홍대병이 있다? (O: 상위 75%, X: 하위 75% 이하): ")
+user_ox = input("나는 특이한 취향이 있다? (O: 상위 75%, X: 하위 75% 이하): ")
 user_release = input("나는 옛날 노래가 좋다? (O, X): ")
 
 filtered_genrechart_df = filter_genre_chart(genrechart_df.copy(), user_genre, user_ox, user_release)
