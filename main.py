@@ -8,18 +8,35 @@ from config import (
     MODEL_PATH, 
     VEC_PLAYID_PATH, 
     VEC_PLAY_PATH, 
-    VEC_GENRECHART_PATH
-)
-from utils import (
-    load_data, 
-    load_vector_models, 
-    get_keywords_from_diary, 
-    build_and_transform_vectors,
-    calculate_playlist_similarity,
-    filter_genre_chart,
-    generate_song_vectors_and_filter,
-    recommend_final_songs
-)
+    VEC_GENRECHART_PATH,
+    USE_FAISS )
+
+# config.USE_FAISS 값에 따라 사용할 유틸리티 모듈을 동적으로 임포트
+
+if USE_FAISS:
+    print("Using FAISS utility functions.")
+    from utils_faiss import (
+        load_data, 
+        load_vector_models, 
+        get_keywords_from_diary, 
+        build_and_transform_vectors,
+        calculate_playlist_similarity,
+        filter_genre_chart,
+        generate_song_vectors_and_filter,
+        recommend_final_songs
+    )
+else:
+    print("Using NumPy utility functions.")
+    from utils_numpy import (
+        load_data, 
+        load_vector_models, 
+        get_keywords_from_diary, 
+        build_and_transform_vectors,
+        calculate_playlist_similarity,
+        filter_genre_chart,
+        generate_song_vectors_and_filter,
+        recommend_final_songs
+    )
 
 clear_output()
 
@@ -55,9 +72,10 @@ try:
         vec_playid = pickle.load(f)
 except FileNotFoundError:
     print("Warning: vec_playid.pkl not found. Building and saving new vector data...")
-    playid_df['tag'] = playid_df['tag'].apply(lambda x: x.split(', ') if isinstance(x, str) else x)
+    # build_and_transform_vectors 함수가 내부에서 copy()를 사용하므로 여기서는 .copy()를 제거
+    playid_df['tag'] = playid_df['tag'].apply(lambda x: x.split(', ') if isinstance(x, str) else x) 
     
-    _, _ = build_and_transform_vectors(playid_df.copy(), MODEL_PATH, VEC_PLAYID_PATH)
+    _, _ = build_and_transform_vectors(playid_df, MODEL_PATH, VEC_PLAYID_PATH)
     with open(VEC_PLAYID_PATH, 'rb') as f:
         vec_playid = pickle.load(f)
 
@@ -95,6 +113,7 @@ try:
         vec_genrechart = pickle.load(f)
 except FileNotFoundError:
     print("Vector files not found. Please run the preprocessing steps to create vec_play.pkl and vec_genrechart.pkl.")
+    # 임시적으로 vec_playid를 사용하거나, 적절한 처리 필요
     vec_play = vec_playid
     vec_genrechart = vec_playid
 
