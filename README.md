@@ -66,7 +66,7 @@ PCA를 거치지 않은 300차원의 Word2Vec 공간에서 유클리드 거리�
 | 버전 | 측정 방법 | 특징 |
 |------|------------|------|
 | **NumPy (Brute-force)** | Euclidean Distance | **NumPy**를 사용하여 곡 벡터와 일기 태그 벡터 간의 **유클리드 거리**를 직접 계산하고 정렬 |
-| **FAISS (IndexFlatL2)** | Euclidean Distance | **FAISS (Facebook AI Similarity Search)** 라이브러리의 **`IndexFlatL2`**를 사용하여 대규모 벡터 검색 환경에서 **고속 유클리드 거리 기반 Top K 검색** 수행 |
+| **FAISS (IndexHNSWFlat)** | Euclidean Distance | **FAISS (Facebook AI Similarity Search)** 라이브러리의 **`IndexHNSWFlat`**를 사용하여 대규모 벡터 검색 환경에서 **고속 유클리드 거리 기반 Top K 검색** 수행 |
 
 ---
 
