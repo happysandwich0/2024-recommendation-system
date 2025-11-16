@@ -22,7 +22,7 @@ def load_data(song_data_path):
 
 def load_vector_models(model_path):
     try:
-        fasttext = KeyedVectors.load_word2vec_format(
+        fasttext = KeyedVectors.load_word_2vec_format(
             model_path,
             binary=False,
             encoding='utf-8',
@@ -57,7 +57,12 @@ def get_keywords_from_diary(api_key, input_text):
     except:
         return ['후련', '뿌듯', '설레', '학기', '시험', '연말']
 
+
 def build_and_transform_vectors(df, model_path, vector_path, pca_components=30):
+    """
+    - PCA 모델을 1회 'fit'
+    - 모든 플레이리스트의 30차원 벡터를 미리 계산, PCA 모델과 함께 저장
+    """
     fasttext = load_vector_models(model_path)
     if fasttext is None:
         return None, None
@@ -85,12 +90,12 @@ def build_and_transform_vectors(df, model_path, vector_path, pca_components=30):
 
     word_vecs = np.array([fasttext.get_vector(w) for w in all_words])
     
-    vector_data = {'all_words': all_words, 'target_words': target_words, 'word_vecs': word_vecs}
-    with open(vector_path, 'wb') as f:
-        pickle.dump(vector_data, f)
-        
+    # --- PCA Fit ---
     pca = PCA(n_components=pca_components)
-    comps = pca.fit_transform(word_vecs)
+    pca.fit(word_vecs) # 원본 300d 벡터로 PCA 학습
+    
+    # --- 플레이리스트 벡터 계산 (30d) ---
+    comps = pca.transform(word_vecs)
     df_comps = pd.DataFrame(comps, 
                             columns=[f'comp_{i+1}' for i in range(pca_components)], 
                             index=all_words)
@@ -101,79 +106,82 @@ def build_and_transform_vectors(df, model_path, vector_path, pca_components=30):
     ])
     matrix_df = pd.DataFrame(matrix, columns=target_words, index=df.index)
 
-    df_targets = df_comps.loc[target_words]
+    # 30d 벡터가 있는 단어들만 선택
+    valid_target_words = [w for w in target_words if w in df_comps.index]
+    df_targets = df_comps.loc[valid_target_words]
+    matrix_df = matrix_df[valid_target_words] 
+    
+    # 30d 벡터 기준 행렬 곱
     df_doc_trans_sum = matrix_df.dot(df_targets)
     
     tag_counts = matrix_df.sum(axis=1)
     df_doc_trans_mean = df_doc_trans_sum.div(tag_counts, axis=0)
     df_doc_trans_mean = df_doc_trans_mean.fillna(0)
+  
+    vector_data = {
+        'pca': pca, # 1. Fit된 PCA 객체
+        'playlist_vectors': df_doc_trans_mean.values.astype('float32'), # 2. 30d 플레이리스트 벡터
+        'playlist_names': df_doc_trans_mean.index.tolist(), # 3. 플레이리스트 이름 
+    }
+    with open(vector_path, 'wb') as f:
+        pickle.dump(vector_data, f)
+        
+    print(f"PCA 모델 및 플레이리스트 벡터({df_doc_trans_mean.shape}) 저장이 완료되었습니다.")
     
     return df_doc_trans_mean, df_comps
 
 def calculate_playlist_similarity(playid_df, diary_tag, fasttext, playid_vec_data, pca_components=30, top_n=5):
-    all_words = playid_vec_data['all_words']
-    target_words = playid_vec_data['target_words']
-    word_vecs = playid_vec_data['word_vecs']
+    """
+    미리 계산된 30차원 플레이리스트 벡터들과,
+    실시간으로 30차원으로 변환된 일기 태그 벡터 간의 유사도를 FAISS로 고속 검색
+    """
     
-    new_word_list = diary_tag
-    new_all_words = new_word_list.copy()
-    new_missing_keys = []
+    # 1. 학습된 데이터 로드
+    try:
+        pca = playid_vec_data['pca']
+        playlist_vectors = playid_vec_data['playlist_vectors'] # (N_playlists, 30)
+        playlist_names = playid_vec_data['playlist_names']
+    except KeyError:
+        print("Error: 'playid_vec_data' 형식이 올바르지 않습니다. build_and_transform_vectors를 다시 실행해야 합니다.")
+        return []
+    
+    D = playlist_vectors.shape[1]
 
-    for word in new_word_list:
-        if word in fasttext:
-            sim_words = [x[0] for x in fasttext.most_similar(word, topn=20)]
-            new_all_words += sim_words
-        else:
-            new_missing_keys.append(word)
+    # 2. 새로운 일기 태그를 300d -> 30d 벡터로 변환
+    diary_tag_vecs_300d = []
+    for tag in diary_tag:
+        if tag in fasttext:
+            diary_tag_vecs_300d.append(fasttext.get_vector(tag))
+    
+    if not diary_tag_vecs_300d:
+        print("일기 태그에서 유효한 벡터를 찾을 수 없습니다.")
+        return []
 
-    new_all_words = [i for i in new_all_words if i not in new_missing_keys]
-    new_target_words = [i for i in new_word_list if i not in new_missing_keys]
+    diary_mean_vec_300d = np.mean(diary_tag_vecs_300d, axis=0)
     
-    new_all_words = list(set(new_all_words))
-    new_target_words = list(set(new_target_words))
+    # 3. Fit된 PCA 객체로 30d로 'transform'
+    diary_vec_30d = pca.transform(diary_mean_vec_300d.reshape(1, -1)).astype('float32') # (1, 30)
+    
+    # 4. FAISS로 유사도 검색 (Cosine Similarity)
+    
+    faiss.normalize_L2(playlist_vectors)
+    faiss.normalize_L2(diary_vec_30d)
 
-    new_all_words_to_add = [i for i in new_all_words if i not in all_words]
-    new_target_words_to_add = [i for i in new_target_words if i not in target_words]
+    # Cosine 유사도 검색 : IndexFlatIP (Inner Product)
+    index = faiss.IndexFlatIP(D) 
+    index.add(playlist_vectors)
     
-    if new_all_words_to_add:
-        new_word_vecs = np.array([fasttext.get_vector(w) for w in new_all_words_to_add])
-        new_vecs_300 = np.concatenate((word_vecs, new_word_vecs), axis=0)
-    else:
-        new_vecs_300 = word_vecs.copy()
-        
-    new_all_words2 = list(set(all_words + new_all_words_to_add))
-    new_target_words2 = list(set(target_words + new_target_words_to_add))
+    # 5. Top N 검색
+    distances, indices = index.search(diary_vec_30d, top_n)
     
-    new_pca = PCA(n_components=pca_components)
-    new_comps = new_pca.fit_transform(new_vecs_300)
-    new_df_comps = pd.DataFrame(new_comps, index=new_all_words2)
-    
-    new_matrix = np.array([
-        [(1 if tag in tags else 0) for tag in new_target_words2]
-        for tags in playid_df['tag'].tolist() + [diary_tag]
-    ])
-    col = playid_df['name'].tolist() + ['new']
-    new_matrix_df = pd.DataFrame(new_matrix, columns=new_target_words2, index=col)
+    # 6. 결과 반환
+    # indices[0]에 (top_n)개의 인덱스
+    selected_indices = indices[0]
 
-    new_df_targets = new_df_comps.loc[new_target_words2]
-    new_df_doc_trans_sum = new_matrix_df.dot(new_df_targets)
+    precomputed_names = [playlist_names[idx] for idx in selected_indices]
+    
+    return precomputed_names
 
-    tag_counts = new_matrix_df.sum(axis=1)
-    new_df_doc_trans_mean = new_df_doc_trans_sum.div(tag_counts, axis=0)
-    new_df_doc_trans_mean = new_df_doc_trans_mean.fillna(0)
-    
-    new_vectors = new_df_doc_trans_mean.loc[col].values
-    new_similarity_matrix = cosine_similarity(new_vectors)
-    new_similarity_df = pd.DataFrame(new_similarity_matrix, index=col, columns=col)
-
-    person_idx = len(new_similarity_df) - 1
-    similarity_scores = new_similarity_matrix[person_idx]
-    
-    most_similar_indices = np.argsort(similarity_scores)[::-1][1:top_n + 1] 
-    
-    selected_names = [playid_df.iloc[idx]['name'] for idx in most_similar_indices]
-    
-    return selected_names
 
 def filter_genre_chart(genrechart_df, genre, ox_input, release_input):
     genre_df = genrechart_df[genrechart_df['장르'].str.contains(genre, case=False, na=False)]
@@ -228,7 +236,6 @@ def generate_song_vectors_and_filter(df, fasttext, vec_data):
                 word_vectors.append(vec_data['word_vecs'][word_idx])
         
         if word_vectors:
-            # FAISS를 위해 float32로 변환
             song_vector = np.mean(word_vectors, axis=0).astype('float32') 
         else:
             song_vector = np.zeros(300).astype('float32')
@@ -254,11 +261,12 @@ def recommend_final_songs(final_df, diary_tag, fasttext, top_n=10):
     
     query_vectors = np.array(query_vectors)
 
-    # 유클리드 거리 검색: IndexFlatL2
-    index = faiss.IndexFlatL2(D)
+    # ANN(근사 근접 이웃) 검색: IndexHNSWFlat (L2)
+    index = faiss.IndexHNSWFlat(D, 32)
+    index.metric_type = faiss.METRIC_L2 # 유클리드 거리 
+    
     index.add(candidate_vectors)
 
-    # 쿼리 수행
     D_faiss, I_faiss = index.search(query_vectors, top_n)
     
     all_results = []
@@ -271,7 +279,6 @@ def recommend_final_songs(final_df, diary_tag, fasttext, top_n=10):
             
     results_df = pd.DataFrame(all_results)
     
-    # 각 후보 곡(index)에 대해 가장 작은 거리(min distance)만 남김
     top_results = results_df.loc[results_df.groupby('index')['distance'].idxmin()]
     
     # 거리가 가장 짧은 Top 10 곡을 선택
