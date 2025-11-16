@@ -1,7 +1,6 @@
 # config.py
 
 import os
-from google.colab import userdata
 
 USE_FAISS = True 
 # True: FAISS를 사용한 고속 Top K 검색 
