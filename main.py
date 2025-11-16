@@ -11,8 +11,6 @@ from config import (
     VEC_GENRECHART_PATH,
     USE_FAISS )
 
-# config.USE_FAISS 값에 따라 사용할 유틸리티 모듈을 동적으로 임포트
-
 if USE_FAISS:
     print("Using FAISS utility functions.")
     from utils_faiss import (
