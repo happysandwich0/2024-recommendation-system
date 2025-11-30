@@ -22,7 +22,7 @@ def load_data(song_data_path):
 
 def load_vector_models(model_path):
     try:
-        fasttext = KeyedVectors.load_word_2vec_format(
+        fasttext = KeyedVectors.load_word2vec_format(
             model_path,
             binary=False,
             encoding='utf-8',
@@ -55,14 +55,18 @@ def get_keywords_from_diary(api_key, input_text):
         diary_tag = ast.literal_eval(keywords)
         return diary_tag
     except:
+        # GPT API 호출 실패 시 디폴트 태그 반환
         return ['후련', '뿌듯', '설레', '학기', '시험', '연말']
 
 
 def build_and_transform_vectors(df, model_path, vector_path, pca_components=30):
     """
-    - PCA 모델을 1회 'fit'
-    - 모든 플레이리스트의 30차원 벡터를 미리 계산, PCA 모델과 함께 저장
+    DataFrame의 태그를 벡터화하고 PCA를 적용합니다.
+    - 유사어 확장 시 코사인 유사도 Cutoff 적용 (노이즈 필터링)
     """
+    
+    COSINE_CUTOFF = 0.55 
+    
     fasttext = load_vector_models(model_path)
     if fasttext is None:
         return None, None
@@ -78,7 +82,12 @@ def build_and_transform_vectors(df, model_path, vector_path, pca_components=30):
 
     for word in target_words:
         if word in fasttext:
-            sim_words = [x[0] for x in fasttext.most_similar(word, topn=100)]
+            # 1. topn=100 유사 단어 튜플을 가져옴
+            similar_tuples = fasttext.most_similar(word, topn=100)
+            
+            # 2. COSINE_CUTOFF를 적용하여 단어 리스트 추출
+            sim_words = [x[0] for x in similar_tuples if x[1] >= COSINE_CUTOFF]
+            
             all_words += sim_words
         else:
             missing_keys.append(word)
@@ -132,9 +141,12 @@ def build_and_transform_vectors(df, model_path, vector_path, pca_components=30):
 
 def calculate_playlist_similarity(playid_df, diary_tag, fasttext, playid_vec_data, pca_components=30, top_n=5):
     """
-    미리 계산된 30차원 플레이리스트 벡터들과,
-    실시간으로 30차원으로 변환된 일기 태그 벡터 간의 유사도를 FAISS로 고속 검색
+    일기 태그 벡터를 생성하고 미리 계산된 플레이리스트 벡터들과의 유사도를 FAISS로 검색합니다.
+    - 유사어 Cutoff 및 PCA 방향 보정 로직을 적용하여 감성 일관성(Semantic Consistency)을 유지합니다.
     """
+    
+    COSINE_CUTOFF = 0.55
+    PCA_ALIGNMENT_CUTOFF = 0.95
     
     # 1. 학습된 데이터 로드
     try:
@@ -147,43 +159,90 @@ def calculate_playlist_similarity(playid_df, diary_tag, fasttext, playid_vec_dat
     
     D = playlist_vectors.shape[1]
 
-    # 2. 새로운 일기 태그를 300d -> 30d 벡터로 변환
+    # 2. 새로운 일기 태그를 300d 벡터로 변환
     diary_tag_vecs_300d = []
+    
+    original_diary_vecs = []
+    
     for tag in diary_tag:
         if tag in fasttext:
-            diary_tag_vecs_300d.append(fasttext.get_vector(tag))
+            # 원본 태그 벡터 저장
+            original_diary_vecs.append(fasttext.get_vector(tag).astype('float32'))
+            
+            # 유사어 확장 (Cosine Cutoff 적용)
+            similar_tuples = fasttext.most_similar(tag, topn=20)
+            sim_words_vecs = [fasttext.get_vector(x[0]).astype('float32') 
+                              for x in similar_tuples if x[1] >= COSINE_CUTOFF]
+            
+            diary_tag_vecs_300d.extend(sim_words_vecs)
     
-    if not diary_tag_vecs_300d:
+    if not original_diary_vecs:
         print("일기 태그에서 유효한 벡터를 찾을 수 없습니다.")
         return []
 
-    diary_mean_vec_300d = np.mean(diary_tag_vecs_300d, axis=0)
+    # 일기 태그 원본 벡터와 필터링된 유사어 벡터를 모두 합쳐 분석
+    all_tag_vectors = np.array(original_diary_vecs + diary_tag_vecs_300d)
+    
+    # PCA 방향 보정 (Semantic Centroid Alignment)
+    if all_tag_vectors.shape[0] > 1:
+        # PCA n_components=1로 설정하여 가장 지배적인 감성 축을 찾음
+        local_pca = PCA(n_components=1)
+        local_pca.fit(all_tag_vectors)
+        
+        pc1_axis = local_pca.components_[0]
+        
+        centroid = np.mean(all_tag_vectors, axis=0)
+        
+        filtered_vectors = []
+        for vec in all_tag_vectors:
+            vector_from_centroid = vec - centroid
+            
+            if np.linalg.norm(vector_from_centroid) > 1e-6:
+                # 코사인 유사도를 사용하여 Centroid에서 벡터로 향하는 방향이 PC1 축과 얼마나 유사한지 확인
+                cos_sim = np.dot(vector_from_centroid, pc1_axis) / (np.linalg.norm(vector_from_centroid) * np.linalg.norm(pc1_axis))
+                
+                if abs(cos_sim) >= PCA_ALIGNMENT_CUTOFF:
+                    filtered_vectors.append(vec)
+            else:
+                filtered_vectors.append(vec)
+        
+        # 필터링된 벡터들의 평균을 일기 대표 벡터로 사용
+        if filtered_vectors:
+            diary_mean_vec_300d = np.mean(filtered_vectors, axis=0)
+        else:
+            diary_mean_vec_300d = centroid
+            print("Warning: PCA Alignment 필터링 후 남은 벡터가 없어 Centroid 원본 사용.")
+    else:
+        diary_mean_vec_300d = all_tag_vectors[0]
     
     # 3. Fit된 PCA 객체로 30d로 'transform'
     diary_vec_30d = pca.transform(diary_mean_vec_300d.reshape(1, -1)).astype('float32') # (1, 30)
     
     # 4. FAISS로 유사도 검색 (Cosine Similarity)
+    D_faiss = playlist_vectors.shape[1]
     
+    # L2 Norm을 적용하여 Inner Product를 Cosine Similarity로 사용
     faiss.normalize_L2(playlist_vectors)
     faiss.normalize_L2(diary_vec_30d)
 
-    # Cosine 유사도 검색 : IndexFlatIP (Inner Product)
-    index = faiss.IndexFlatIP(D) 
+    # Cosine 유사도 검색
+    index = faiss.IndexFlatIP(D_faiss) 
     index.add(playlist_vectors)
     
     # 5. Top N 검색
     distances, indices = index.search(diary_vec_30d, top_n)
     
     # 6. 결과 반환
-    # indices[0]에 (top_n)개의 인덱스
     selected_indices = indices[0]
-
     precomputed_names = [playlist_names[idx] for idx in selected_indices]
     
     return precomputed_names
 
 
 def filter_genre_chart(genrechart_df, genre, ox_input, release_input):
+    """
+    사용자 취향에 따라 장르/차트 곡을 1차 필터링합니다.
+    """
     genre_df = genrechart_df[genrechart_df['장르'].str.contains(genre, case=False, na=False)]
 
     if release_input == 'O':
@@ -211,7 +270,13 @@ def filter_genre_chart(genrechart_df, genre, ox_input, release_input):
     return genre_df if not genre_df.empty else pd.DataFrame()
 
 def generate_song_vectors_and_filter(df, fasttext, vec_data):
+    """
+    곡의 태그를 벡터화하고 word_vecs 열을 추가합니다.
+    """
     all_new_word_vecs_list = []
+    
+    # 0.55 미만 코사인 유사도를 가진 단어를 유사어 풀에서 제외 (노이즈 필터링)
+    COSINE_CUTOFF = 0.55
 
     for _, row in df.iterrows():
         keyword_list = row['키워드']
@@ -222,7 +287,8 @@ def generate_song_vectors_and_filter(df, fasttext, vec_data):
         new_missing_keys = []
         for word in all_words_for_row:
             if word in fasttext:
-                sim_words = [x[0] for x in fasttext.most_similar(word, topn=20)]
+                similar_tuples = fasttext.most_similar(word, topn=20)
+                sim_words = [x[0] for x in similar_tuples if x[1] >= COSINE_CUTOFF]
                 new_all_words += sim_words
             else:
                 new_missing_keys.append(word)
@@ -236,6 +302,7 @@ def generate_song_vectors_and_filter(df, fasttext, vec_data):
                 word_vectors.append(vec_data['word_vecs'][word_idx])
         
         if word_vectors:
+            # 모든 태그 벡터의 평균(Mean)을 곡의 대표 벡터로 사용 (300차원)
             song_vector = np.mean(word_vectors, axis=0).astype('float32') 
         else:
             song_vector = np.zeros(300).astype('float32')
@@ -247,6 +314,9 @@ def generate_song_vectors_and_filter(df, fasttext, vec_data):
     return df
 
 def recommend_final_songs(final_df, diary_tag, fasttext, top_n=10):
+    """
+    최종 후보 곡들과 일기 태그 벡터 간의 유클리드 거리를 FAISS (IndexHNSWFlat)로 고속 검색합니다.
+    """
     
     candidate_vectors = np.stack(final_df['word_vecs'].values)
     D = candidate_vectors.shape[1]
@@ -261,12 +331,13 @@ def recommend_final_songs(final_df, diary_tag, fasttext, top_n=10):
     
     query_vectors = np.array(query_vectors)
 
-    # ANN(근사 근접 이웃) 검색: IndexHNSWFlat (L2)
+    # ANN(근사 근접 이웃) 검색: IndexHNSWFlat (L2) - 유클리드 거리
     index = faiss.IndexHNSWFlat(D, 32)
-    index.metric_type = faiss.METRIC_L2 # 유클리드 거리 
+    index.metric_type = faiss.METRIC_L2 
     
     index.add(candidate_vectors)
 
+    # 일기 태그 벡터 각각에 대해 Top N 검색
     D_faiss, I_faiss = index.search(query_vectors, top_n)
     
     all_results = []
@@ -277,11 +348,12 @@ def recommend_final_songs(final_df, diary_tag, fasttext, top_n=10):
             candidate_index = I_faiss[tag_index, rank]
             all_results.append({'index': candidate_index, 'distance': distance})
             
+    # 가장 짧은 거리(가장 가까운)를 기준으로 중복 제거
     results_df = pd.DataFrame(all_results)
     
     top_results = results_df.loc[results_df.groupby('index')['distance'].idxmin()]
     
-    # 거리가 가장 짧은 Top 10 곡을 선택
+    # 거리가 가장 짧은 Top 10 곡을 최종 선택
     top_10_similar = top_results.sort_values(by='distance', ascending=True).head(top_n)
     top_10_indices = top_10_similar['index']
     
