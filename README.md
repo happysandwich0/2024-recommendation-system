@@ -43,8 +43,10 @@
 **2️⃣ 벡터 공간 구축 및 최적화 (Word Embedding)**
 
 * **모델**: `FastText Korean Pretrained Model` 활용
-* **유사 단어 풀 확장**: 기존 태그에 `FastText` 기반의 유사 단어를 추가하여 태그 커버리지를 확장하고 벡터 공간의 견고성 증대.
-* **차원 축소:** PCA (Principal Component Analysis) 적용 → 노이즈 제거 및 계산 효율성 극대화.
+* **유사 단어 풀 확장 및 노이즈 제거**: 기존 태그에 FastText 기반의 유사 단어를 추가하며, 이 과정에서 **코사인 유사도 기준치(Cosine Similarity Cutoff, 0.55)**를 적용해 **Semantic Drift**가 발생한 노이즈 단어를 사전에 필터링
+
+* **감성 일관성 확보**: 실시간으로 생성된 일기 태그 벡터들에 대해 **로컬 PCA(Principal Component Analysis)**를 적용하여 주성분 축(Main Semantic Axis)과 직교하는 방향의 벡터를 제거하는 방향 보정(Semantic Centroid Alignment, 0.95) 로직 적용
+* **차원 축소:** PCA (Principal Component Analysis) 적용 → 노이즈 제거 및 계산 효율성 극대화
 
   
 
@@ -75,6 +77,6 @@ PCA를 거치지 않은 300차원의 Word2Vec 공간에서 유클리드 거리�
 | 단계 | 주요 기술 | 목적 |
 |------|-------------|------|
 | ① 태그 추출 | GPT-3.5-turbo | 일기에서 핵심 감정 및 키워드 추출 |
-| ② 벡터화 | FastText, PCA | 의미 공간 구축 및 최적화 |
+| ② 벡터화/정제 | FastText, PCA, Cosine Cutoff, PCA Alignment | 의미 공간 구축 및 감성 일관성 유지 |
 | ③ 필터링 | Cosine Similarity, 조건 필터 | 테마 및 취향 기반 후보군 정제 |
 | ④ 추천 | Euclidean Distance, **FAISS / NumPy** | 최종 근접성 기반 개인 맞춤 추천 및 **검색 속도 최적화** |
