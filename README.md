@@ -36,7 +36,7 @@
 * **기능**: 사용자의 일기 텍스트를 분석
     * **키워드 3개** 추출
     * **감정 3개** 추출
-    * → 총 **6개의 핵심 태그(명사 형태)** 추출 완료
+    * → 총 **6개의 핵심 태그(명사 형태)** 추출 
 
   
 
@@ -44,11 +44,9 @@
 
 * **모델**: `FastText Korean Pretrained Model` 활용
 * **유사 단어 풀 확장 및 노이즈 제거**: 기존 태그에 FastText 기반의 유사 단어를 추가하며, 이 과정에서 **코사인 유사도 기준치(Cosine Similarity Cutoff, 0.55)**를 적용해 **Semantic Drift**가 발생한 노이즈 단어를 사전에 필터링
-
-* **감성 일관성 확보**: 실시간으로 생성된 일기 태그 벡터들에 대해 **로컬 PCA(Principal Component Analysis)**를 적용하여 주성분 축(Main Semantic Axis)과 직교하는 방향의 벡터를 제거하는 방향 보정(Semantic Centroid Alignment, 0.95) 로직 적용
+* **감성 일관성 확보**: 실시간으로 생성된 일기 태그 벡터들에 대해 로컬 PCA를 적용하여 주성분 축(Main Semantic Axis)과 직교하는 방향의 벡터를 제거하는 방향 보정(Semantic Centroid Alignment, 0.95) 로직 적용
 * **차원 축소:** PCA (Principal Component Analysis) 적용 → 노이즈 제거 및 계산 효율성 극대화
 
-  
 
 **3️⃣ 하이브리드 후보 곡 필터링 (Filtering)**
 
